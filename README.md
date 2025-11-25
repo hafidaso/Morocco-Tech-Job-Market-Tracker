@@ -731,7 +731,6 @@ pkill -f "next dev"
 - [x] **Database Integration**: JSON pipeline now syncs to Supabase (PostgreSQL + JSONB)
 - [x] **AI-Powered Semantic Search**: Vector embeddings enable intelligent job search by meaning
 - [x] **Email Alerts**: Users subscribe to keywords and get Resend-powered digests
-- [ ] **Authentication**: User accounts and saved searches
 - [ ] **Hybrid Search**: Combine keyword + semantic search for best results
 - [ ] **Advanced Analytics**: Salary trends, experience level analysis
 - [x] **Export Features**: PDF reports, CSV downloads (✅ Implemented)
