@@ -21,7 +21,7 @@ A full-stack data intelligence platform that scrapes, analyzes, and visualizes t
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
 - [Future Enhancements](#future-enhancements)
-```
+
 ## 🎯 Overview
 
 This project transforms raw job postings into actionable market intelligence. It automatically:
@@ -413,5 +413,3 @@ Built as a full-stack data intelligence project demonstrating:
 
 **Last Updated**: November 2025  
 **Version**: 1.0
-
->>>>>>> 8fbeb4e (Initial commit: Morocco Tech Job Tracker)
