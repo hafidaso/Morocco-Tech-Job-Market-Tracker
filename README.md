@@ -48,6 +48,7 @@ This project transforms raw job postings into actionable market intelligence. It
 - 📱 **Responsive UI**: Dark mode dashboard built with Next.js and Tailwind CSS
 - 🔁 **Auto-refresh**: Frontend polls API every 60 seconds for fresh data
 - 📬 **Email Alerts**: Users subscribe to keywords and get Resend-powered digests whenever new matching jobs land
+- 📥 **Export Reports**: Download current job data as CSV (Excel-compatible) or PDF reports with one click
 
 ## 🏗️ Architecture
 
@@ -476,6 +477,49 @@ Return month-over-month counts for the most in-demand skills (or a specific skil
 }
 ```
 
+### `GET /export/csv`
+Download job listings as a CSV file (Excel-compatible). Perfect for data analysis in spreadsheets.
+
+**Query Parameters** (optional filters):
+- `city` (optional): Filter by city (e.g., "Casablanca")
+- `role` (optional): Filter by role (e.g., "Data Scientist")
+- `skill` (optional): Filter by detected skill (e.g., "React")
+
+**Example**:
+```bash
+curl "http://127.0.0.1:8000/export/csv?city=Casablanca" -o jobs.csv
+```
+
+**Response**: CSV file with columns:
+- Title, Company, Location, City, Role, Date Posted, Skills, Job URL
+
+**Frontend**: Click the "Download CSV" button in the dashboard header.
+
+### `GET /export/pdf`
+Download job listings as a formatted PDF report with summary statistics and job listings.
+
+**Query Parameters** (optional filters):
+- `city` (optional): Filter by city (e.g., "Casablanca")
+- `role` (optional): Filter by role (e.g., "Data Scientist")
+- `skill` (optional): Filter by detected skill (e.g., "React")
+
+**Example**:
+```bash
+curl "http://127.0.0.1:8000/export/pdf?skill=Python" -o report.pdf
+```
+
+**Response**: PDF file containing:
+- Report title and generation timestamp
+- Summary statistics (total jobs, top city, top skill)
+- Job listings table (first 50 jobs, with truncated fields for readability)
+- Note: CSV export recommended for complete data
+
+**Frontend**: Click the "Download PDF" button in the dashboard header.
+
+**Requirements**:
+- CSV export: Uses `pandas` (already in requirements.txt)
+- PDF export: Requires `reportlab` (already in requirements.txt)
+
 ## 🔄 Data Pipeline
 
 ### Phase 1: Scraping (`scraper.py`)
@@ -520,6 +564,7 @@ Return month-over-month counts for the most in-demand skills (or a specific skil
 - **Visualizations**: Bar charts (skills), pie charts (cities), line charts (historical trends)
 - **Search**: Real-time filtering by company/role (keyword search)
 - **AI Search**: Toggle button to enable semantic search with debounced queries
+- **Export**: Download buttons for CSV and PDF reports in the dashboard header
 
 ## ⚙️ Configuration
 
@@ -689,7 +734,7 @@ pkill -f "next dev"
 - [ ] **Authentication**: User accounts and saved searches
 - [ ] **Hybrid Search**: Combine keyword + semantic search for best results
 - [ ] **Advanced Analytics**: Salary trends, experience level analysis
-- [ ] **Export Features**: PDF reports, CSV downloads
+- [x] **Export Features**: PDF reports, CSV downloads (✅ Implemented)
 - [ ] **Multi-language Support**: Arabic/French UI
 - [ ] **Machine Learning**: Skill demand forecasting
 - [ ] **Docker Deployment**: Containerized setup

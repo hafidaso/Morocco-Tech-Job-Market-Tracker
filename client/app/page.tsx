@@ -24,6 +24,7 @@ import {
   TrendingUp,
   Search,
   ExternalLink,
+  Download,
 } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
@@ -89,6 +90,7 @@ export default function Dashboard() {
   const [subscriberKeyword, setSubscriberKeyword] = useState("");
   const [subscribeStatus, setSubscribeStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState<"csv" | "pdf" | null>(null);
   const initialLoad = useRef(true);
 
   useEffect(() => {
@@ -209,6 +211,44 @@ export default function Dashboard() {
     }
   };
 
+  const handleDownload = async (format: "csv" | "pdf") => {
+    try {
+      setDownloadLoading(format);
+      const response = await axios.get(`${API_URL}/export/${format}`, {
+        responseType: "blob",
+      });
+
+      // Create a blob URL and trigger download
+      const blob = new Blob([response.data], {
+        type: format === "csv" ? "text/csv" : "application/pdf",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      
+      // Extract filename from Content-Disposition header or use default
+      const contentDisposition = response.headers["content-disposition"] || response.headers["Content-Disposition"] || "";
+      let filename = `morocco_tech_jobs_${new Date().toISOString().split("T")[0]}.${format}`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/i);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1].replace(/['"]/g, "").trim();
+        }
+      }
+      
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(`Failed to download ${format.toUpperCase()}:`, error);
+      alert(`Failed to download ${format.toUpperCase()} report. Please try again.`);
+    } finally {
+      setDownloadLoading(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
@@ -229,9 +269,51 @@ export default function Dashboard() {
           </h1>
           <p className="text-slate-400 mt-1">Real-time Job Market Intelligence</p>
         </div>
-        <div className="flex items-center gap-2 bg-slate-900 px-4 py-2 rounded-lg border border-slate-800">
-          <div className="h-3 w-3 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-sm font-medium text-green-400">System Live</span>
+        <div className="flex items-center gap-3">
+          <div className="relative group">
+            <button
+              onClick={() => handleDownload("csv")}
+              disabled={downloadLoading !== null}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-500 transition-colors text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Download current data as CSV (Excel-compatible)"
+            >
+              {downloadLoading === "csv" ? (
+                <>
+                  <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm">Exporting...</span>
+                </>
+              ) : (
+                <>
+                  <Download size={16} />
+                  <span className="text-sm">Download CSV</span>
+                </>
+              )}
+            </button>
+          </div>
+          <div className="relative group">
+            <button
+              onClick={() => handleDownload("pdf")}
+              disabled={downloadLoading !== null}
+              className="flex items-center gap-2 bg-red-600 hover:bg-red-500 transition-colors text-white font-semibold rounded-lg px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Download current data as PDF report"
+            >
+              {downloadLoading === "pdf" ? (
+                <>
+                  <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm">Exporting...</span>
+                </>
+              ) : (
+                <>
+                  <Download size={16} />
+                  <span className="text-sm">Download PDF</span>
+                </>
+              )}
+            </button>
+          </div>
+          <div className="flex items-center gap-2 bg-slate-900 px-4 py-2 rounded-lg border border-slate-800">
+            <div className="h-3 w-3 rounded-full bg-green-500 animate-pulse" />
+            <span className="text-sm font-medium text-green-400">System Live</span>
+          </div>
         </div>
       </header>
 
@@ -469,7 +551,7 @@ export default function Dashboard() {
                     <td className="px-6 py-4 font-medium text-white">{job.title ?? "N/A"}</td>
                     <td className="px-6 py-4">{job.company ?? "—"}</td>
                     <td className="px-6 py-4">{job.searched_city ?? job.location ?? "Unknown"}</td>
-                    <td className="px-6 py-4">{formatDate(job.date_posted)}</td>
+                    <td className="px-6 py-4 text-slate-300">{formatDate(job.date_posted)}</td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap gap-1">
                         {visibleSkills.map((skill) => (
@@ -516,16 +598,39 @@ type KpiCardProps = {
 };
 
 function formatDate(value?: string) {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.valueOf())) {
+  if (!value || value.trim() === "") return "—";
+  
+  // Handle ISO date strings (YYYY-MM-DD) more reliably
+  // JavaScript's Date constructor can be inconsistent with date-only strings
+  try {
+    // If it's already in ISO format (YYYY-MM-DD), parse it explicitly
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+      const [year, month, day] = value.trim().split("-").map(Number);
+      const parsed = new Date(year, month - 1, day); // month is 0-indexed
+      if (Number.isNaN(parsed.valueOf())) {
+        return value;
+      }
+      return parsed.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    }
+    
+    // Try standard Date parsing for other formats
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.valueOf())) {
+      return value;
+    }
+    return parsed.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch (error) {
+    // If all parsing fails, return the original value
     return value;
   }
-  return parsed.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 function KpiCard({ title, value, icon, subValue }: KpiCardProps) {
