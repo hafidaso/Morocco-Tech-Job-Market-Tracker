@@ -86,10 +86,6 @@ export default function Dashboard() {
   const [useSemanticSearch, setUseSemanticSearch] = useState(false);
   const [semanticResults, setSemanticResults] = useState<Job[]>([]);
   const [semanticLoading, setSemanticLoading] = useState(false);
-  const [subscriberEmail, setSubscriberEmail] = useState("");
-  const [subscriberKeyword, setSubscriberKeyword] = useState("");
-  const [subscribeStatus, setSubscribeStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
-  const [subscribeLoading, setSubscribeLoading] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState<"csv" | "pdf" | null>(null);
   const initialLoad = useRef(true);
 
@@ -180,36 +176,6 @@ export default function Dashboard() {
     });
   }, [stats.jobs, searchTerm, useSemanticSearch, semanticResults]);
 
-  const handleSubscribe = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSubscribeStatus(null);
-
-    if (!subscriberEmail || !subscriberKeyword) {
-      setSubscribeStatus({ type: "error", message: "Please provide both email and keyword." });
-      return;
-    }
-
-    try {
-      setSubscribeLoading(true);
-      const response = await axios.post(`${API_URL}/subscribe`, {
-        email: subscriberEmail,
-        keyword: subscriberKeyword,
-      });
-      setSubscribeStatus({ type: "success", message: response.data?.message ?? "Subscription saved!" });
-      setSubscriberEmail("");
-      setSubscriberKeyword("");
-    } catch (error: unknown) {
-      const fallback = "Could not save your subscription. Please try again.";
-      if (axios.isAxiosError(error)) {
-        const detail = (error.response?.data as { detail?: string })?.detail;
-        setSubscribeStatus({ type: "error", message: detail ?? fallback });
-      } else {
-        setSubscribeStatus({ type: "error", message: fallback });
-      }
-    } finally {
-      setSubscribeLoading(false);
-    }
-  };
 
   const handleDownload = async (format: "csv" | "pdf") => {
     try {
@@ -316,56 +282,6 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
-
-      <section className="bg-slate-900 border border-slate-800 rounded-xl p-6 mb-10 shadow-lg">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 mb-4">
-          <div>
-            <p className="text-sm font-semibold tracking-wide text-blue-400 uppercase">New</p>
-            <h2 className="text-2xl font-semibold text-white mt-1">Let the jobs come to you</h2>
-            <p className="text-slate-400 text-sm mt-1">
-              Subscribe once and receive email alerts whenever we scrape fresh roles that mention your favorite skill.
-            </p>
-          </div>
-          <div className="hidden md:flex items-center gap-2 text-sm text-slate-400">
-            <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-            Real-time alerts powered by Resend
-          </div>
-        </div>
-        <form className="flex flex-col md:flex-row gap-4" onSubmit={handleSubscribe}>
-          <input
-            type="email"
-            placeholder="Email address"
-            className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-blue-500"
-            value={subscriberEmail}
-            onChange={(event) => setSubscriberEmail(event.target.value)}
-            required
-          />
-          <input
-            type="text"
-            placeholder='Keyword (e.g. "React")'
-            className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-blue-500"
-            value={subscriberKeyword}
-            onChange={(event) => setSubscriberKeyword(event.target.value)}
-            required
-          />
-          <button
-            type="submit"
-            className="bg-blue-600 hover:bg-blue-500 transition text-white font-semibold rounded-lg px-6 py-3 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={subscribeLoading}
-          >
-            {subscribeLoading ? "Subscribing..." : "Subscribe"}
-          </button>
-        </form>
-        {subscribeStatus && (
-          <p
-            className={`text-sm mt-4 ${
-              subscribeStatus.type === "success" ? "text-green-400" : "text-amber-400"
-            }`}
-          >
-            {subscribeStatus.message}
-          </p>
-        )}
-      </section>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
         <KpiCard

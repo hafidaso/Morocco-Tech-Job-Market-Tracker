@@ -11,7 +11,6 @@
 -- ============================================
 -- This is recommended since job listings are public data
 ALTER TABLE public.jobs DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.subscriptions DISABLE ROW LEVEL SECURITY;
 
 -- Verify RLS is disabled
 SELECT 
@@ -19,7 +18,7 @@ SELECT
   rowsecurity as rls_enabled
 FROM pg_tables 
 WHERE schemaname = 'public' 
-  AND tablename IN ('jobs', 'subscriptions');
+  AND tablename = 'jobs';
 
 -- ============================================
 -- OPTION 2: Keep RLS enabled but allow all operations (More secure)
@@ -56,22 +55,6 @@ CREATE POLICY "Allow public deletes"
   ON public.jobs 
   FOR DELETE 
   USING (true);
-
--- Same for subscriptions table
-DROP POLICY IF EXISTS "Allow public reads" ON public.subscriptions;
-DROP POLICY IF EXISTS "Allow public inserts" ON public.subscriptions;
-
-ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Allow public reads" 
-  ON public.subscriptions 
-  FOR SELECT 
-  USING (true);
-
-CREATE POLICY "Allow public inserts" 
-  ON public.subscriptions 
-  FOR INSERT 
-  WITH CHECK (true);
 */
 
 -- ============================================
@@ -81,23 +64,14 @@ CREATE POLICY "Allow public inserts"
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.jobs TO anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.jobs TO authenticated;
 
-GRANT SELECT, INSERT ON public.subscriptions TO anon;
-GRANT SELECT, INSERT ON public.subscriptions TO authenticated;
-
 -- Grant usage on sequences (for auto-increment IDs)
--- Only grant if sequences exist (jobs uses BIGSERIAL, subscriptions might use UUID)
+-- Only grant if sequences exist (jobs uses BIGSERIAL)
 DO $$
 BEGIN
   -- Grant permissions on jobs sequence (always exists if jobs table uses BIGSERIAL)
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'jobs_id_seq') THEN
     GRANT USAGE, SELECT ON SEQUENCE public.jobs_id_seq TO anon;
     GRANT USAGE, SELECT ON SEQUENCE public.jobs_id_seq TO authenticated;
-  END IF;
-  
-  -- Only grant if subscriptions uses a sequence (BIGSERIAL), not UUID
-  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriptions_id_seq') THEN
-    GRANT USAGE, SELECT ON SEQUENCE public.subscriptions_id_seq TO anon;
-    GRANT USAGE, SELECT ON SEQUENCE public.subscriptions_id_seq TO authenticated;
   END IF;
 END $$;
 

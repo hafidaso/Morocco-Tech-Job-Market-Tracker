@@ -12,12 +12,6 @@ BEGIN
     ALTER TABLE public.jobs DISABLE ROW LEVEL SECURITY;
     RAISE NOTICE 'RLS disabled on jobs table';
   END IF;
-  
-  -- Disable RLS on subscriptions table if it exists
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'subscriptions') THEN
-    ALTER TABLE public.subscriptions DISABLE ROW LEVEL SECURITY;
-    RAISE NOTICE 'RLS disabled on subscriptions table';
-  END IF;
 END $$;
 
 -- ============================================
@@ -33,16 +27,6 @@ BEGIN
   END IF;
 END $$;
 
--- Subscriptions table permissions
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'subscriptions') THEN
-    GRANT SELECT, INSERT ON public.subscriptions TO anon;
-    GRANT SELECT, INSERT ON public.subscriptions TO authenticated;
-    RAISE NOTICE 'Permissions granted on subscriptions table';
-  END IF;
-END $$;
-
 -- ============================================
 -- Step 3: Grant sequence permissions (only if sequences exist)
 -- ============================================
@@ -53,15 +37,6 @@ BEGIN
     GRANT USAGE, SELECT ON SEQUENCE public.jobs_id_seq TO anon;
     GRANT USAGE, SELECT ON SEQUENCE public.jobs_id_seq TO authenticated;
     RAISE NOTICE 'Sequence permissions granted for jobs_id_seq';
-  END IF;
-  
-  -- Subscriptions sequence (only if table uses BIGSERIAL, not UUID)
-  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriptions_id_seq') THEN
-    GRANT USAGE, SELECT ON SEQUENCE public.subscriptions_id_seq TO anon;
-    GRANT USAGE, SELECT ON SEQUENCE public.subscriptions_id_seq TO authenticated;
-    RAISE NOTICE 'Sequence permissions granted for subscriptions_id_seq';
-  ELSE
-    RAISE NOTICE 'No subscriptions_id_seq found (table may use UUID - this is OK)';
   END IF;
 END $$;
 
@@ -76,14 +51,4 @@ SELECT
 FROM pg_tables 
 WHERE schemaname = 'public' 
   AND tablename = 'jobs';
-
--- Show subscriptions status if it exists
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'subscriptions') THEN
-    RAISE NOTICE 'Subscriptions table exists and is ready';
-  ELSE
-    RAISE NOTICE 'Subscriptions table does not exist (this is OK if you haven''t set up email alerts yet)';
-  END IF;
-END $$;
 

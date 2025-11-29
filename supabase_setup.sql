@@ -49,25 +49,8 @@ BEGIN
   END IF;
 END $$;
 
--- 6. Create subscriptions table for email alerts
-CREATE TABLE IF NOT EXISTS public.subscriptions (
-  id BIGSERIAL PRIMARY KEY,
-  email TEXT NOT NULL,
-  keyword TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(email, keyword)
-);
-
--- 7. Create index for faster subscription lookups
-CREATE INDEX IF NOT EXISTS subscriptions_email_idx ON public.subscriptions (email);
-CREATE INDEX IF NOT EXISTS subscriptions_keyword_idx ON public.subscriptions (keyword);
-
--- 8. Disable RLS for subscriptions (or create policies if you prefer)
-ALTER TABLE public.subscriptions DISABLE ROW LEVEL SECURITY;
-
 -- Verify the tables were created
 SELECT 
   'Tables created successfully!' as status,
-  (SELECT COUNT(*) FROM public.jobs) as jobs_count,
-  (SELECT COUNT(*) FROM public.subscriptions) as subscriptions_count;
+  (SELECT COUNT(*) FROM public.jobs) as jobs_count;
 
