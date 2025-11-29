@@ -43,11 +43,12 @@ This project transforms raw job postings into actionable market intelligence. It
 - 📈 **Historical Trends**: Line chart tracking monthly velocity for top tech stacks
 - 🔍 **Search & Filter**: Find jobs by company, role, or city
 - 🧠 **AI-Powered Semantic Search**: Vector search finds jobs by meaning, not just keywords (e.g., "AI" finds "Machine Learning", "LLM", "Artificial Intelligence")
+- 🎯 **Hybrid Search**: Combine semantic search with exact filters (e.g., find "AI jobs" in "Casablanca" requiring "Python")
+- 🔗 **More Like This**: Find similar jobs based on any job posting using AI similarity matching
 - 🌐 **RESTful API**: FastAPI backend with automatic documentation
 - ☁️ **Supabase Storage**: Processed jobs synced to PostgreSQL + JSONB for reliable persistence
 - 📱 **Responsive UI**: Dark mode dashboard built with Next.js and Tailwind CSS
 - 🔁 **Auto-refresh**: Frontend polls API every 60 seconds for fresh data
-- 📬 **Email Alerts**: Users subscribe to keywords and get Resend-powered digests whenever new matching jobs land
 - 📥 **Export Reports**: Download current job data as CSV (Excel-compatible) or PDF reports with one click
 
 ## 🏗️ Architecture
@@ -121,8 +122,6 @@ Job Market Trends Tracker/
 ├── main.py                         # Phase 3: FastAPI + automation + semantic search
 ├── generate_embeddings.py          # Generate vector embeddings for semantic search
 ├── import_to_supabase.py           # Import jobs to Supabase database
-├── test_semantic_search.py         # Test script for semantic search
-├── test_email.py                   # Test script for email alerts
 ├── test_semantic_search.py         # Test script for semantic search functionality
 │
 ├── requirements.txt                 # Python dependencies
@@ -132,13 +131,14 @@ Job Market Trends Tracker/
 ├── supabase_setup.sql              # Initial Supabase table setup
 ├── supabase_vector_setup.sql       # Vector search setup (pgvector)
 ├── supabase_vector_setup_fixed.sql # Fixed vector setup (alternative)
-├── supabase_subscriptions_setup.sql # Email subscriptions table
+├── supabase_hybrid_search_setup.sql # Hybrid search + More Like This setup
 ├── fix_supabase_rls.sql            # Fix Row Level Security permissions
 ├── fix_supabase_rls_simple.sql     # Simple RLS fix (recommended)
 ├── test_sync.py                    # Test Supabase sync after RLS fix
+├── test_hybrid_search.py           # Test hybrid search and similar jobs
 │
-├── EMAIL_ALERTS_SETUP.md          # Email alerts documentation
 ├── SEMANTIC_SEARCH_SETUP.md       # Semantic search documentation
+├── HYBRID_SEARCH_SETUP.md         # Hybrid search and More Like This docs
 │
 ├── client/                         # Next.js frontend
 │   ├── app/
@@ -232,7 +232,14 @@ To enable semantic search (finding jobs by meaning, not just keywords):
      - Create the `search_jobs_semantic()` RPC function
      - Grant execute permissions
 
-2. **Generate Embeddings**:
+2. **Enable Hybrid Search & More Like This** (Optional but Recommended):
+   - Run `supabase_hybrid_search_setup.sql` in Supabase SQL Editor
+   - This adds:
+     - `search_jobs_hybrid()` - Semantic search + filters
+     - `find_similar_jobs()` - Find similar jobs by job ID
+   - See `HYBRID_SEARCH_SETUP.md` for detailed documentation
+
+3. **Generate Embeddings**:
    - After importing jobs to Supabase, generate vector embeddings:
      ```bash
      python3 generate_embeddings.py
@@ -241,17 +248,15 @@ To enable semantic search (finding jobs by meaning, not just keywords):
    - The script automatically skips jobs that already have embeddings
    - Processes in batches of 32 for efficiency
 
-3. **Test Semantic Search**:
-   - Start the API: `uvicorn main:app --reload`
-   - Test the search endpoint:
+4. **Test Search Features**:
+   - Basic semantic search: `python3 test_semantic_search.py`
+   - Hybrid search & similar jobs: `python3 test_hybrid_search.py`
+   - Or test via API:
      ```bash
-     curl "http://127.0.0.1:8000/jobs/search?query=AI&limit=5&threshold=0.2"
+     curl "http://127.0.0.1:8000/jobs/search?query=AI&limit=5"
+     curl "http://127.0.0.1:8000/jobs/search/hybrid?query=AI&city=Casablanca&limit=5"
+     curl "http://127.0.0.1:8000/jobs/123/similar?limit=5"
      ```
-   - Or use the test script:
-     ```bash
-     python3 test_semantic_search.py
-     ```
-   - In the frontend, toggle the "🧠 AI" button to enable semantic search
 
 **Note**: 
 - The first time you run `generate_embeddings.py`, it will download the model (~90MB)
@@ -410,6 +415,79 @@ curl "http://127.0.0.1:8000/jobs/search?query=AI&limit=10&threshold=0.3"
 }
 ```
 
+### `GET /jobs/search/hybrid` 🆕
+**Hybrid Search**: Combine semantic search with exact filters for precise results.
+
+**Query Parameters**:
+- `query` (required): Search query (e.g., "Machine Learning", "Backend")
+- `city` (optional): Filter by exact city (e.g., "Casablanca")
+- `role` (optional): Filter by role (e.g., "Data Scientist")
+- `skill` (optional): Filter by exact skill (e.g., "Python")
+- `limit` (optional, default: 20, max: 50): Maximum number of results
+- `threshold` (optional, default: 0.3): Similarity threshold
+
+**Example**:
+```bash
+# Find AI jobs in Casablanca requiring Python
+curl "http://127.0.0.1:8000/jobs/search/hybrid?query=AI&city=Casablanca&skill=Python&limit=10"
+```
+
+**Response**:
+```json
+{
+  "query": "AI",
+  "filters": {
+    "city": "Casablanca",
+    "role": null,
+    "skill": "Python"
+  },
+  "total": 8,
+  "data": [...]
+}
+```
+
+**How it works**: 
+- Searches by meaning (semantic) AND applies exact filters
+- All filters are AND conditions (results must match ALL)
+- Perfect for: "Find ML jobs in Casablanca" or "Backend jobs requiring Java"
+
+### `GET /jobs/{job_id}/similar` 🆕
+**More Like This**: Find jobs similar to a specific job posting.
+
+**Path Parameters**:
+- `job_id` (required): ID of the source job
+
+**Query Parameters**:
+- `limit` (optional, default: 5, max: 20): Maximum number of similar jobs
+- `threshold` (optional, default: 0.3): Similarity threshold
+
+**Example**:
+```bash
+# Find 5 jobs similar to job #123
+curl "http://127.0.0.1:8000/jobs/123/similar?limit=5"
+```
+
+**Response**:
+```json
+{
+  "source_job_id": 123,
+  "total": 5,
+  "data": [
+    {
+      "title": "ML Specialist",
+      "company": "DataCo",
+      "similarity": 0.92
+    }
+  ]
+}
+```
+
+**How it works**:
+- Uses the embedding of the source job as the query
+- Finds nearest neighbors in vector space
+- Excludes the source job itself
+- Perfect for "Related Jobs" or "You may also like" features
+
 **How it works**: 
 - Uses `sentence-transformers/all-MiniLM-L6-v2` to convert job descriptions and queries into 384-dimensional vectors
 - Finds jobs with similar semantic meaning using cosine similarity
@@ -429,22 +507,6 @@ curl "http://127.0.0.1:8000/jobs/search?query=AI&limit=10&threshold=0.3"
 - Similarity threshold: Adjustable (0.0-1.0), default 0.3
   - Lower threshold (0.1-0.2): More results, broader matches
   - Higher threshold (0.4-0.5): Fewer results, more precise matches
-
-### `POST /subscribe`
-Persist an email + keyword subscription. The backend will automatically email the subscriber after future scrapes uncover matching jobs.
-
-**Payload**:
-```json
-{
-  "email": "you@example.com",
-  "keyword": "react"
-}
-```
-
-**Responses**:
-- `200 OK` + confirmation message if created or already exists
-- `400 Bad Request` if the keyword is missing
-- `500 Internal Server Error` if Supabase insert fails
 
 ### `GET /trends/skills`
 Get top 10 most in-demand skills.
@@ -628,40 +690,12 @@ scheduler.add_job(run_pipeline, "interval", hours=6)
 1. Run `supabase_setup.sql` in Supabase SQL Editor to create tables
 2. Run `fix_supabase_rls_simple.sql` to disable RLS (required for data sync)
 3. Run `supabase_vector_setup.sql` if you want semantic search (optional)
-4. Run `supabase_subscriptions_setup.sql` if you want email alerts (optional)
 
 **Testing**: After setup, verify everything works:
 ```bash
 python3 test_sync.py  # Tests Supabase sync
 python3 test_semantic_search.py  # Tests semantic search (if enabled)
 ```
-
-### Notifications (Resend + subscriptions)
-
-1. **Create the `subscriptions` table** (SQL editor → run):
-   ```sql
-   create table if not exists public.subscriptions (
-     id uuid primary key default uuid_generate_v4(),
-     email text not null,
-     keyword text not null,
-     created_at timestamptz not null default now()
-   );
-   create index if not exists subscriptions_email_idx on public.subscriptions (email);
-   create index if not exists subscriptions_keyword_idx on public.subscriptions (keyword);
-   ```
-   > **Note**: The `fix_supabase_rls_simple.sql` script will handle permissions automatically. If using `supabase_setup.sql`, it also disables RLS.
-
-2. **Configure Resend**:
-   ```bash
-   export RESEND_API_KEY=re_********************************
-   export RESEND_FROM_EMAIL="Morocco Jobs <jobs@yourdomain.com>"
-   ```
-   - The default sender falls back to `jobs@resend.dev` if `RESEND_FROM_EMAIL` is omitted.
-   - Install the SDK (`pip3 install resend`) if you haven't already.
-
-3. **How it works**:
-   - When `run_pipeline()` ingests fresh jobs, it compares them to previously cached IDs.
-   - Matching subscribers receive a digest (max 10 jobs) per keyword via Resend.
 
 ### Frontend Settings (`client/app/page.tsx`)
 
@@ -780,10 +814,11 @@ pkill -f "next dev"
 
 - [x] **Database Integration**: JSON pipeline now syncs to Supabase (PostgreSQL + JSONB)
 - [x] **AI-Powered Semantic Search**: Vector embeddings enable intelligent job search by meaning
-- [x] **Email Alerts**: Users subscribe to keywords and get Resend-powered digests
-- [ ] **Hybrid Search**: Combine keyword + semantic search for best results
-- [ ] **Advanced Analytics**: Salary trends, experience level analysis
+- [x] **Hybrid Search**: Combine semantic search with exact filters (city, role, skill)
+- [x] **More Like This**: Find similar jobs using vector similarity
 - [x] **Export Features**: PDF reports, CSV downloads
+- [ ] **Personalized Recommendations**: ML-based job recommendations based on user preferences
+- [ ] **Advanced Analytics**: Salary trends, experience level analysis
 - [ ] **Multi-language Support**: Arabic/French UI
 - [ ] **Machine Learning**: Skill demand forecasting
 - [ ] **Docker Deployment**: Containerized setup
@@ -820,7 +855,7 @@ Built as a full-stack data intelligence project demonstrating:
 ---
 
 **Last Updated**: November 2025  
-**Version**: 1.1
+**Version**: 1.2
 
 ---
 
@@ -850,7 +885,7 @@ cd client && npm run dev
 - **Test Scripts**: 
   - `test_sync.py` - Verify Supabase sync works
   - `test_semantic_search.py` - Test AI-powered search
-  - `test_email.py` - Test email alert functionality
+  - `test_hybrid_search.py` - Test hybrid search and similar jobs
 
 - **Setup Scripts**:
   - `fix_supabase_rls_simple.sql` - Fix RLS permissions (use this one!)

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import io
 import json
 import os
 import subprocess
@@ -12,13 +13,20 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 from supabase import Client, create_client  # type: ignore[import]
+import pandas as pd
 
 try:
-    import resend  # type: ignore[import]
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+    REPORTLAB_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency
-    resend = None
+    REPORTLAB_AVAILABLE = False
 
 try:
     from sentence_transformers import SentenceTransformer  # type: ignore[import]
@@ -42,23 +50,11 @@ SUPABASE_KEY = os.environ.get(
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhamVtcWJudnhtdHFmc25udmp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNzEzNTYsImV4cCI6MjA3OTY0NzM1Nn0.Tnpga0j1IFyEQF61PsAQdHVgWhqhHjg7PW0dfPAvlaE",
 )
 SUPABASE_TABLE = "jobs"
-SUBSCRIPTIONS_TABLE = "subscriptions"
-
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
-# Use onboarding@resend.dev for testing (Resend's verified test domain)
-# For production, use your verified domain (e.g., jobs@yourdomain.com)
-RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
-MAX_JOBS_PER_EMAIL = 10
 
 JOBS_DATA = []
 supabase_client: Client | None = None
 LAST_JOB_IDS: set[Any] = set()
 _embedding_model: Any = None  # Lazy-loaded sentence transformer model
-
-
-class SubscriptionPayload(BaseModel):
-    email: EmailStr
-    keyword: str
 
 
 def get_supabase_client() -> Client:
@@ -211,133 +207,14 @@ def run_pipeline() -> None:
             if (job_id := job.get("id")) not in previous_ids and job_id not in (None, "")
         ]
         if new_jobs:
-            print(f"📧 {len(new_jobs)} new jobs detected; checking subscriber alerts...")
-            try:
-                notify_subscribers(new_jobs)
-            except Exception as exc:  # pragma: no cover - defensive path
-                print(f"❌ Failed to notify subscribers: {exc}")
+            print(f"📧 {len(new_jobs)} new jobs detected.")
         else:
-            print("ℹ️ No brand-new jobs since last run. Skipping email notifications.")
+            print("ℹ️ No brand-new jobs since last run.")
         print("🎉 AUTO-UPDATE FINISHED: API is serving fresh data.\n")
     except subprocess.CalledProcessError as exc:
         print(f"❌ Error during auto-update (exit code {exc.returncode}): {exc}")
     except Exception as exc:  # pragma: no cover - defensive path
         print(f"❌ Unexpected error during auto-update: {exc}")
-
-
-def fetch_subscriptions() -> list[dict[str, Any]]:
-    """Fetch all active keyword subscriptions."""
-    try:
-        client = get_supabase_client()
-        response = client.table(SUBSCRIPTIONS_TABLE).select("*").execute()
-        return response.data or []
-    except Exception as exc:
-        print(f"⚠️ Could not load subscriptions: {exc}")
-        return []
-
-
-def job_matches_keyword(job: dict[str, Any], keyword: str) -> bool:
-    """Return True if the job looks relevant for the keyword."""
-    if not keyword:
-        return False
-
-    keyword_lower = keyword.lower()
-    text_fields = [
-        job.get("title") or "",
-        job.get("company") or "",
-        job.get("searched_role") or "",
-    ]
-    if any(keyword_lower in field.lower() for field in text_fields if field):
-        return True
-
-    skills = job.get("extracted_skills") or []
-    return any(keyword_lower in str(skill).lower() for skill in skills)
-
-
-def filter_jobs_by_keyword(keyword: str, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pick the subset of jobs that match a given keyword."""
-    trimmed = keyword.strip()
-    if not trimmed:
-        return []
-    matched = [job for job in jobs if job_matches_keyword(job, trimmed)]
-    return matched[:MAX_JOBS_PER_EMAIL]
-
-
-def build_email_html(keyword: str, jobs: list[dict[str, Any]]) -> str:
-    """Prepare a compact HTML digest for the subscriber."""
-    items = []
-    for job in jobs:
-        title = job.get("title", "New role")
-        company = job.get("company", "Unknown company")
-        city = job.get("searched_city") or "Morocco"
-        date_posted = job.get("date_posted") or "Recently"
-        skills = ", ".join(job.get("extracted_skills") or []) or "Skills TBD"
-        items.append(
-            f"<li><strong>{title}</strong> @ {company} — {city} "
-            f"<br/><small>Posted: {date_posted} • Skills: {skills}</small></li>"
-        )
-
-    jobs_list_html = "".join(items)
-    return (
-        f"<h2>🔥 Fresh {keyword.title()} opportunities</h2>"
-        f"<p>We just found {len(jobs)} new postings that mention “{keyword}”.</p>"
-        f"<ol>{jobs_list_html}</ol>"
-        "<p style='margin-top:16px;'>You are receiving this alert because you subscribed on Morocco Tech Monitor.</p>"
-    )
-
-
-def send_email_via_resend(email: str, keyword: str, jobs: list[dict[str, Any]]) -> None:
-    """Send an alert email using Resend."""
-    if not RESEND_API_KEY:
-        print("⚠️ RESEND_API_KEY is not configured. Skipping email delivery.")
-        return
-    if resend is None:
-        print("⚠️ Resend SDK is missing. Run `pip install resend` to enable alerts.")
-        return
-
-    resend.api_key = RESEND_API_KEY
-    subject = f"{len(jobs)} new {keyword.title()} role{'s' if len(jobs) > 1 else ''} in Morocco"
-    payload = {
-        "from": RESEND_FROM_EMAIL,
-        "to": [email],
-        "subject": subject,
-        "html": build_email_html(keyword, jobs),
-    }
-    try:
-        resend.Emails.send(payload)  # type: ignore[attr-defined]
-        print(f"✅ Alert sent to {email} for keyword '{keyword}'.")
-    except Exception as exc:  # pragma: no cover - network dependent
-        print(f"❌ Failed to send Resend email to {email}: {exc}")
-
-
-def notify_subscribers(new_jobs: list[dict[str, Any]]) -> None:
-    """Notify subscribers whose keywords match the new jobs."""
-    if not new_jobs:
-        return
-
-    subscriptions = fetch_subscriptions()
-    if not subscriptions:
-        print("ℹ️ No subscribers found. Skipping email notifications.")
-        return
-
-    notifications_sent = 0
-    for subscription in subscriptions:
-        email = (subscription.get("email") or "").strip()
-        keyword = (subscription.get("keyword") or "").strip()
-        if not email or not keyword:
-            continue
-
-        relevant_jobs = filter_jobs_by_keyword(keyword, new_jobs)
-        if not relevant_jobs:
-            continue
-
-        send_email_via_resend(email, keyword, relevant_jobs)
-        notifications_sent += 1
-
-    if notifications_sent:
-        print(f"📨 Completed {notifications_sent} subscriber notification(s).")
-    else:
-        print("ℹ️ No subscribers matched the new postings.")
 
 
 @asynccontextmanager
@@ -483,44 +360,163 @@ def semantic_search(
         ) from exc
 
 
-@app.post("/subscribe")
-def create_subscription(payload: SubscriptionPayload):
-    """Persist a new keyword subscription."""
-    keyword = payload.keyword.strip()
-    if not keyword:
-        raise HTTPException(status_code=400, detail="Keyword is required.")
+@app.get("/jobs/search/hybrid")
+def hybrid_search(
+    query: str = Query(..., description="Search query (e.g., 'Machine Learning', 'Web Development')"),
+    city: str | None = Query(None, description="Filter by city (e.g., 'Casablanca')"),
+    role: str | None = Query(None, description="Filter by role (e.g., 'Data Scientist')"),
+    skill: str | None = Query(None, description="Filter by skill (e.g., 'Python')"),
+    limit: int = Query(20, ge=1, le=50, description="Maximum number of results"),
+    threshold: float = Query(0.3, ge=0.0, le=1.0, description="Similarity threshold (0.0-1.0)"),
+):
+    """
+    Hybrid search: Combine semantic search with exact filters.
+    
+    This endpoint allows you to search by meaning AND filter by specific criteria:
+    - Search for "AI" (semantic) AND filter by city="Casablanca" (exact match)
+    - Search for "Backend" (semantic) AND filter by skill="Python" (exact match)
+    
+    Example: Find AI-related jobs in Casablanca that require Python
+    - query="AI", city="Casablanca", skill="Python"
+    
+    Returns jobs that match BOTH the semantic search AND all provided filters.
+    """
+    if not SEMANTIC_SEARCH_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Semantic search is not available. Install sentence-transformers: pip install sentence-transformers",
+        )
 
-    normalized_keyword = keyword.lower()
+    model = get_embedding_model()
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to load embedding model. Check server logs.",
+        )
 
     try:
         client = get_supabase_client()
-        existing = (
-            client.table(SUBSCRIPTIONS_TABLE)
-            .select("id")
-            .eq("email", payload.email)
-            .eq("keyword", normalized_keyword)
-            .execute()
-        )
-        if existing.data:
-            return {"status": "ok", "message": "You are already subscribed to that keyword."}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}") from exc
 
-        client.table(SUBSCRIPTIONS_TABLE).insert(
-            [
-                {
-                    "email": payload.email,
-                    "keyword": normalized_keyword,
-                }
-            ]
+    # Generate embedding for the search query
+    try:
+        query_embedding = model.encode(query, convert_to_numpy=True).tolist()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate query embedding: {exc}") from exc
+
+    # Call the Supabase RPC function for hybrid search
+    try:
+        response = client.rpc(
+            "search_jobs_hybrid",
+            {
+                "query_embedding": query_embedding,
+                "match_threshold": float(threshold),
+                "match_count": int(limit),
+                "filter_city": city,
+                "filter_role": role,
+                "filter_skill": skill,
+            },
         ).execute()
 
+        results = response.data or []
+        
+        # Convert to internal job format
+        jobs = [to_internal_job(row) for row in results]
+        
         return {
-            "status": "ok",
-            "message": f"Subscription saved. We'll email new '{keyword}' roles automatically.",
+            "query": query,
+            "filters": {
+                "city": city,
+                "role": role,
+                "skill": skill,
+            },
+            "total": len(jobs),
+            "data": jobs,
+            "threshold": threshold,
+        }
+    except Exception as exc:
+        error_msg = str(exc)
+        print(f"❌ Hybrid search error: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Hybrid search failed: {error_msg}. Make sure the hybrid search function exists in Supabase.",
+        ) from exc
+
+
+@app.get("/jobs/{job_id}/similar")
+def find_similar_jobs(
+    job_id: int,
+    limit: int = Query(5, ge=1, le=20, description="Maximum number of similar jobs"),
+    threshold: float = Query(0.3, ge=0.0, le=1.0, description="Similarity threshold (0.0-1.0)"),
+):
+    """
+    Find jobs similar to a specific job (More Like This feature).
+    
+    This endpoint finds jobs that are semantically similar to the given job.
+    Useful for showing "Related Jobs" or "You may also like" sections.
+    
+    Example: GET /jobs/123/similar?limit=5
+    Returns the 5 most similar jobs to job #123.
+    
+    How it works:
+    - Uses the embedding of the source job to find nearest neighbors
+    - Excludes the source job itself from results
+    - Orders by similarity (highest first)
+    """
+    if not SEMANTIC_SEARCH_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Semantic search is not available. Install sentence-transformers: pip install sentence-transformers",
+        )
+
+    try:
+        client = get_supabase_client()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}") from exc
+
+    # Call the Supabase RPC function to find similar jobs
+    try:
+        response = client.rpc(
+            "find_similar_jobs",
+            {
+                "source_job_id": int(job_id),
+                "match_threshold": float(threshold),
+                "match_count": int(limit),
+            },
+        ).execute()
+
+        results = response.data or []
+        
+        if not results:
+            # Try to check if the source job exists
+            job_check = client.table(SUPABASE_TABLE).select("id, title, embedding").eq("id", job_id).execute()
+            if not job_check.data:
+                raise HTTPException(status_code=404, detail=f"Job #{job_id} not found")
+            if not job_check.data[0].get("embedding"):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Job #{job_id} does not have an embedding. Run generate_embeddings.py first.",
+                )
+        
+        # Convert to internal job format
+        jobs = [to_internal_job(row) for row in results]
+        
+        return {
+            "source_job_id": job_id,
+            "total": len(jobs),
+            "data": jobs,
+            "threshold": threshold,
         }
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save subscription: {exc}") from exc
+        error_msg = str(exc)
+        print(f"❌ Similar jobs search error: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to find similar jobs: {error_msg}. Make sure the find_similar_jobs function exists in Supabase.",
+        ) from exc
 
 
 @app.get("/trends/skills")
@@ -580,4 +576,206 @@ def get_skill_history(
         history.append(row)
 
     return {"skills": tracked_skills, "data": history}
+
+
+@app.get("/export/csv")
+def export_csv(
+    city: str | None = Query(None, description="Filter by city"),
+    role: str | None = Query(None, description="Filter by role"),
+    skill: str | None = Query(None, description="Filter by skill"),
+):
+    """Export jobs data as CSV file."""
+    filtered_jobs = JOBS_DATA
+    if city:
+        filtered_jobs = [j for j in filtered_jobs if (j.get("searched_city") or "").lower() == city.lower()]
+    if role:
+        filtered_jobs = [
+            j
+            for j in filtered_jobs
+            if role.lower() in (j.get("searched_role") or j.get("title", "")).lower()
+        ]
+    if skill:
+        filtered_jobs = [
+            j
+            for j in filtered_jobs
+            if any(skill.lower() == s.lower() for s in j.get("extracted_skills", []))
+        ]
+
+    # Prepare data for DataFrame
+    export_data = []
+    for job in filtered_jobs:
+        export_data.append({
+            "Title": job.get("title", ""),
+            "Company": job.get("company", ""),
+            "Location": job.get("location", ""),
+            "City": job.get("searched_city", ""),
+            "Role": job.get("searched_role", ""),
+            "Date Posted": job.get("date_posted", ""),
+            "Skills": ", ".join(job.get("extracted_skills", [])),
+            "Job URL": job.get("job_url", ""),
+        })
+
+    df = pd.DataFrame(export_data)
+    
+    # Create CSV in memory
+    output = io.StringIO()
+    df.to_csv(output, index=False)
+    output.seek(0)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"morocco_tech_jobs_{timestamp}.csv"
+    
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/export/pdf")
+def export_pdf(
+    city: str | None = Query(None, description="Filter by city"),
+    role: str | None = Query(None, description="Filter by role"),
+    skill: str | None = Query(None, description="Filter by skill"),
+):
+    """Export jobs data as PDF report."""
+    if not REPORTLAB_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="PDF export is not available. Install reportlab: pip install reportlab",
+        )
+
+    filtered_jobs = JOBS_DATA
+    if city:
+        filtered_jobs = [j for j in filtered_jobs if (j.get("searched_city") or "").lower() == city.lower()]
+    if role:
+        filtered_jobs = [
+            j
+            for j in filtered_jobs
+            if role.lower() in (j.get("searched_role") or j.get("title", "")).lower()
+        ]
+    if skill:
+        filtered_jobs = [
+            j
+            for j in filtered_jobs
+            if any(skill.lower() == s.lower() for s in j.get("extracted_skills", []))
+        ]
+
+    # Create PDF in memory
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    styles = getSampleStyleSheet()
+    story = []
+
+    # Title
+    title_style = ParagraphStyle(
+        "CustomTitle",
+        parent=styles["Heading1"],
+        fontSize=24,
+        textColor=colors.HexColor("#6366f1"),
+        spaceAfter=30,
+        alignment=1,  # Center
+    )
+    story.append(Paragraph("Morocco Tech Job Market Report", title_style))
+    story.append(Spacer(1, 0.2*inch))
+
+    # Report metadata
+    timestamp = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+    meta_style = ParagraphStyle(
+        "Meta",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=colors.HexColor("#64748b"),
+        alignment=1,
+    )
+    story.append(Paragraph(f"Generated on {timestamp}", meta_style))
+    story.append(Paragraph(f"Total Jobs: {len(filtered_jobs)}", meta_style))
+    story.append(Spacer(1, 0.3*inch))
+
+    # Summary statistics
+    if filtered_jobs:
+        all_skills = [skill for job in filtered_jobs for skill in job.get("extracted_skills", [])]
+        top_skills = Counter(all_skills).most_common(5)
+        cities = Counter([job.get("searched_city", "Unknown") for job in filtered_jobs])
+        
+        summary_data = [
+            ["Metric", "Value"],
+            ["Total Jobs", str(len(filtered_jobs))],
+            ["Top City", cities.most_common(1)[0][0] if cities else "N/A"],
+            ["Top Skill", top_skills[0][0] if top_skills else "N/A"],
+        ]
+        
+        summary_table = Table(summary_data, colWidths=[3*inch, 3*inch])
+        summary_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e293b")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#0f172a")),
+            ("TEXTCOLOR", (0, 1), (-1, -1), colors.whitesmoke),
+            ("GRID", (0, 0), (-1, -1), 1, colors.HexColor("#334155")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#1e293b"), colors.HexColor("#0f172a")]),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 0.4*inch))
+
+    # Jobs table (limit to first 50 for PDF)
+    jobs_to_export = filtered_jobs[:50]
+    if jobs_to_export:
+        story.append(Paragraph("Job Listings", styles["Heading2"]))
+        story.append(Spacer(1, 0.2*inch))
+
+        # Prepare table data
+        table_data = [["Title", "Company", "City", "Skills", "Date"]]
+        for job in jobs_to_export:
+            title = (job.get("title") or "N/A")[:40]  # Truncate long titles
+            company = (job.get("company") or "N/A")[:25]
+            city = (job.get("searched_city") or job.get("location") or "Unknown")[:20]
+            skills = ", ".join(job.get("extracted_skills", [])[:3])[:30]  # First 3 skills
+            date_posted = job.get("date_posted", "N/A")[:10]  # Just date part
+            table_data.append([title, company, city, skills, date_posted])
+
+        # Create table
+        jobs_table = Table(table_data, colWidths=[2*inch, 1.5*inch, 1*inch, 2*inch, 1*inch], repeatRows=1)
+        jobs_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#6366f1")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 10),
+            ("FONTSIZE", (0, 1), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#0f172a")),
+            ("TEXTCOLOR", (0, 1), (-1, -1), colors.whitesmoke),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#334155")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#1e293b"), colors.HexColor("#0f172a")]),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(jobs_table)
+
+        if len(filtered_jobs) > 50:
+            story.append(Spacer(1, 0.2*inch))
+            note_style = ParagraphStyle(
+                "Note",
+                parent=styles["Normal"],
+                fontSize=9,
+                textColor=colors.HexColor("#94a3b8"),
+                fontStyle="italic",
+            )
+            story.append(Paragraph(f"Note: Showing first 50 of {len(filtered_jobs)} jobs. Export CSV for complete data.", note_style))
+
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"morocco_tech_jobs_{timestamp}.pdf"
+    
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
