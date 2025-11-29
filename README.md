@@ -33,7 +33,7 @@ This project transforms raw job postings into actionable market intelligence. It
 4. **Analyzes** trends to identify in-demand technologies
 5. **Visualizes** insights through an interactive dashboard with AI-powered search
 
-**Current Dataset**: 505+ unique job postings with skill extraction, trend analysis, and **fully operational AI-powered semantic search** using vector embeddings.
+**Current Dataset**: 650+ unique job postings with skill extraction, trend analysis, and **fully operational AI-powered semantic search** using vector embeddings.
 
 ## ✨ Features
 
@@ -131,7 +131,11 @@ Job Market Trends Tracker/
 │
 ├── supabase_setup.sql              # Initial Supabase table setup
 ├── supabase_vector_setup.sql       # Vector search setup (pgvector)
+├── supabase_vector_setup_fixed.sql # Fixed vector setup (alternative)
 ├── supabase_subscriptions_setup.sql # Email subscriptions table
+├── fix_supabase_rls.sql            # Fix Row Level Security permissions
+├── fix_supabase_rls_simple.sql     # Simple RLS fix (recommended)
+├── test_sync.py                    # Test Supabase sync after RLS fix
 │
 ├── EMAIL_ALERTS_SETUP.md          # Email alerts documentation
 ├── SEMANTIC_SEARCH_SETUP.md       # Semantic search documentation
@@ -183,7 +187,13 @@ Job Market Trends Tracker/
    ```
    > Keep secrets private—never commit `.env` to git.
 
-4. **Verify installation**:
+4. **Set up Supabase Database**:
+   - Go to your Supabase project: https://supabase.com/dashboard
+   - Open SQL Editor and run `supabase_setup.sql` to create tables
+   - Run `fix_supabase_rls_simple.sql` to fix Row Level Security permissions (required for data sync)
+   - See [Troubleshooting](#supabase-rls-permissions-error) section if you encounter permission errors
+
+5. **Verify installation**:
    ```bash
    python3 --version
    python3 -c "import fastapi; import supabase; print('FastAPI + Supabase ready')"
@@ -296,8 +306,10 @@ uvicorn main:app --reload
    - Command: `python analyze_skills.py`
    - Check: `processed_jobs_for_api.json` exists, contains `job_url` plus `extracted_skills`.
 3. **Database Sync (Persistence)**
+   - **Important**: Make sure RLS is disabled or policies are set (run `fix_supabase_rls_simple.sql` first)
    - Command: run `sync_supabase_from_disk()` or start the API (`uvicorn main:app --reload`).
    - Check: Supabase Table Editor shows rows in `jobs`, `job_url` is populated.
+   - Test: Run `python3 test_sync.py` to verify sync works correctly.
 4. **Semantic Search Setup**
    - Command: Run `supabase_vector_setup.sql` in Supabase SQL Editor, then `python3 generate_embeddings.py`
    - Check: Run `python3 test_semantic_search.py` to verify embeddings and search functionality
@@ -333,7 +345,7 @@ Health check and job count.
 ```json
 {
   "status": "Live",
-  "jobs_count": 454
+  "jobs_count": 650
 }
 ```
 
@@ -610,6 +622,20 @@ scheduler.add_job(run_pipeline, "interval", hours=6)
 
 > `sync_supabase_from_disk()` truncates and re-inserts all rows after each pipeline run.
 
+### Supabase Database Setup
+
+**Initial Setup**:
+1. Run `supabase_setup.sql` in Supabase SQL Editor to create tables
+2. Run `fix_supabase_rls_simple.sql` to disable RLS (required for data sync)
+3. Run `supabase_vector_setup.sql` if you want semantic search (optional)
+4. Run `supabase_subscriptions_setup.sql` if you want email alerts (optional)
+
+**Testing**: After setup, verify everything works:
+```bash
+python3 test_sync.py  # Tests Supabase sync
+python3 test_semantic_search.py  # Tests semantic search (if enabled)
+```
+
 ### Notifications (Resend + subscriptions)
 
 1. **Create the `subscriptions` table** (SQL editor → run):
@@ -623,7 +649,7 @@ scheduler.add_job(run_pipeline, "interval", hours=6)
    create index if not exists subscriptions_email_idx on public.subscriptions (email);
    create index if not exists subscriptions_keyword_idx on public.subscriptions (keyword);
    ```
-   > Grant insert/select rights to the same service key used by the API.
+   > **Note**: The `fix_supabase_rls_simple.sql` script will handle permissions automatically. If using `supabase_setup.sql`, it also disables RLS.
 
 2. **Configure Resend**:
    ```bash
@@ -666,6 +692,30 @@ uvicorn main:app --reload
 ```bash
 pkill -f "next dev"
 ```
+
+### Supabase RLS Permissions Error
+
+**Error**: `new row violates row-level security policy for table "jobs"`
+
+**Solution**: This happens when Row Level Security (RLS) is enabled but no policies allow inserts.
+
+1. **Quick Fix**:
+   - Open Supabase SQL Editor
+   - Run `fix_supabase_rls_simple.sql` (recommended - handles all edge cases)
+   - Or run this quick SQL:
+     ```sql
+     ALTER TABLE public.jobs DISABLE ROW LEVEL SECURITY;
+     GRANT SELECT, INSERT, UPDATE, DELETE ON public.jobs TO anon;
+     GRANT SELECT, INSERT, UPDATE, DELETE ON public.jobs TO authenticated;
+     ```
+
+2. **Verify the fix**:
+   ```bash
+   python3 test_sync.py
+   ```
+   This will test syncing data to Supabase and report any errors.
+
+3. **Alternative**: If you prefer to keep RLS enabled, use the policies in `fix_supabase_rls.sql` (uncomment Option 2 section).
 
 ### Bayt Returns 403 Errors
 
@@ -731,10 +781,9 @@ pkill -f "next dev"
 - [x] **Database Integration**: JSON pipeline now syncs to Supabase (PostgreSQL + JSONB)
 - [x] **AI-Powered Semantic Search**: Vector embeddings enable intelligent job search by meaning
 - [x] **Email Alerts**: Users subscribe to keywords and get Resend-powered digests
-- [ ] **Authentication**: User accounts and saved searches
 - [ ] **Hybrid Search**: Combine keyword + semantic search for best results
 - [ ] **Advanced Analytics**: Salary trends, experience level analysis
-- [x] **Export Features**: PDF reports, CSV downloads (✅ Implemented)
+- [x] **Export Features**: PDF reports, CSV downloads
 - [ ] **Multi-language Support**: Arabic/French UI
 - [ ] **Machine Learning**: Skill demand forecasting
 - [ ] **Docker Deployment**: Containerized setup
@@ -742,13 +791,14 @@ pkill -f "next dev"
 
 ## 📊 Current Statistics
 
-- **Total Jobs Scraped**: 505+ unique job postings
-- **Jobs with Embeddings**: 505 (100% coverage for semantic search)
-- **Average Skills per Job**: 3.9
-- **Top Skills**: Agile (167), Python (142), SQL (142)
+- **Total Jobs Scraped**: 650+ unique job postings
+- **Latest Scrape**: 470 new jobs (November 2025)
+- **Jobs with Embeddings**: Variable (run `generate_embeddings.py` to generate)
+- **Average Skills per Job**: 3.6
+- **Top Skills**: Agile (163), Python (144), SQL (138), Machine Learning (93)
 - **Cities Covered**: Casablanca, Rabat, Tanger, Morocco-wide
 - **Update Frequency**: Every 6 hours (automatic)
-- **Semantic Search**: Fully operational with 384-dimensional vectors
+- **Semantic Search**: Fully operational with 384-dimensional vectors (when embeddings are generated)
 
 ## 📝 License
 
@@ -770,4 +820,38 @@ Built as a full-stack data intelligence project demonstrating:
 ---
 
 **Last Updated**: November 2025  
-**Version**: 1.0
+**Version**: 1.1
+
+---
+
+## 🔧 Quick Start Commands
+
+```bash
+# 1. Install dependencies
+pip3 install -r requirements.txt
+cd client && npm install && cd ..
+
+# 2. Set up Supabase (run in Supabase SQL Editor)
+# - supabase_setup.sql
+# - fix_supabase_rls_simple.sql
+
+# 3. Start backend
+uvicorn main:app --reload
+
+# 4. Start frontend (new terminal)
+cd client && npm run dev
+
+# 5. Access dashboard
+# http://localhost:3000
+```
+
+## 📚 Additional Resources
+
+- **Test Scripts**: 
+  - `test_sync.py` - Verify Supabase sync works
+  - `test_semantic_search.py` - Test AI-powered search
+  - `test_email.py` - Test email alert functionality
+
+- **Setup Scripts**:
+  - `fix_supabase_rls_simple.sql` - Fix RLS permissions (use this one!)
+  - `fix_supabase_rls.sql` - Alternative RLS fix with policies
