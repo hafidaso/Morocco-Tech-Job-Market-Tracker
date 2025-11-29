@@ -17,6 +17,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from supabase import Client, create_client  # type: ignore[import]
 import pandas as pd
+import numpy as np
 
 try:
     from reportlab.lib import colors
@@ -778,4 +779,215 @@ def export_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@app.get("/analytics/forecast")
+def get_skill_forecasts(
+    skill: str | None = Query(None, description="Specific skill to forecast (optional)"),
+    top: int = Query(10, ge=1, le=20, description="Number of top skills to forecast"),
+):
+    """
+    Forecast skill demand trends using linear regression.
+    
+    Analyzes historical data to predict whether skill demand is growing or declining.
+    Uses simple linear regression and moving averages for predictions.
+    
+    Query params:
+    - skill: Focus on a specific skill (e.g., "Python", "React")
+    - top: Number of top skills to analyze (default: 10)
+    
+    Returns trend analysis with:
+    - Current state, predicted next month, percentage change
+    - Trend direction (growing/declining/stable)
+    - Actionable recommendations
+    """
+    def calculate_monthly_skill_counts(jobs: list[dict]) -> dict[str, dict[str, int]]:
+        monthly_counts = defaultdict(lambda: defaultdict(int))
+        for job in jobs:
+            date_str = job.get("date_posted")
+            skills = job.get("extracted_skills", [])
+            if not date_str or not skills:
+                continue
+            try:
+                date_obj = datetime.fromisoformat(date_str)
+                month_key = date_obj.strftime("%Y-%m")
+                for s in skills:
+                    monthly_counts[s][month_key] += 1
+            except (ValueError, TypeError):
+                continue
+        return dict(monthly_counts)
+    
+    def simple_linear_regression(x: list[float], y: list[float]) -> tuple[float, float]:
+        n = len(x)
+        if n < 2:
+            return 0, 0
+        x_mean = np.mean(x)
+        y_mean = np.mean(y)
+        numerator = sum((x[i] - x_mean) * (y[i] - y_mean) for i in range(n))
+        denominator = sum((x[i] - x_mean) ** 2 for i in range(n))
+        if denominator == 0:
+            return 0, y_mean
+        slope = numerator / denominator
+        intercept = y_mean - slope * x_mean
+        return slope, intercept
+    
+    def forecast_skill(skill_name: str, monthly_data: dict[str, int]) -> dict:
+        if len(monthly_data) < 2:
+            return {"skill": skill_name, "status": "insufficient_data"}
+        
+        sorted_months = sorted(monthly_data.keys())
+        counts = [monthly_data[month] for month in sorted_months]
+        x = list(range(len(sorted_months)))
+        slope, intercept = simple_linear_regression(x, counts)
+        
+        predicted_value = slope * len(x) + intercept
+        predicted_next = max(0, round(predicted_value))
+        
+        if slope > 1:
+            trend = "growing"
+            trend_strength = "strong" if slope > 5 else "moderate"
+        elif slope < -1:
+            trend = "declining"
+            trend_strength = "strong" if slope < -5 else "moderate"
+        else:
+            trend = "stable"
+            trend_strength = "stable"
+        
+        recent_avg = np.mean(counts[-3:]) if len(counts) >= 3 else counts[-1]
+        pct_change = ((predicted_next - recent_avg) / recent_avg * 100) if recent_avg > 0 else 0
+        
+        recommendations = []
+        if trend == "growing":
+            recommendations.append("✅ High demand - Consider learning or improving this skill")
+            if trend_strength == "strong":
+                recommendations.append(f"🔥 Strong growth - Hot skill in the market")
+        elif trend == "declining":
+            recommendations.append("⚠️ Declining demand - May want to focus on other skills")
+        else:
+            recommendations.append("📊 Stable demand - Consistent opportunities available")
+        
+        return {
+            "skill": skill_name,
+            "status": "success",
+            "trend": trend,
+            "trend_strength": trend_strength,
+            "slope": round(slope, 2),
+            "current_month_count": counts[-1],
+            "recent_average": round(recent_avg, 1),
+            "predicted_next_month": predicted_next,
+            "predicted_change_pct": round(pct_change, 1),
+            "historical_data": {"months": sorted_months, "counts": counts},
+            "recommendations": recommendations,
+        }
+    
+    # Calculate monthly trends
+    monthly_data = calculate_monthly_skill_counts(JOBS_DATA)
+    
+    if skill:
+        # Forecast specific skill
+        if skill not in monthly_data:
+            raise HTTPException(status_code=404, detail=f"Skill '{skill}' not found in data")
+        forecast = forecast_skill(skill, monthly_data[skill])
+        return {"forecasts": [forecast]}
+    
+    # Forecast top skills
+    skill_totals = {s: sum(months.values()) for s, months in monthly_data.items()}
+    top_skills = sorted(skill_totals.items(), key=lambda x: x[1], reverse=True)[:top]
+    
+    forecasts = []
+    for skill_name, _ in top_skills:
+        forecast = forecast_skill(skill_name, monthly_data[skill_name])
+        if forecast["status"] == "success":
+            forecasts.append(forecast)
+    
+    return {
+        "forecasts": forecasts,
+        "total_skills_analyzed": len(forecasts),
+    }
+
+
+@app.get("/analytics/heatmap")
+def get_city_tech_heatmap(
+    top_skills: int = Query(15, ge=5, le=30, description="Number of top skills to include"),
+):
+    """
+    Generate City vs Technology heatmap matrix.
+    
+    Shows which technologies are popular in which cities.
+    Reveals regional differences in tech stack preferences.
+    
+    Returns:
+    - Matrix: Cities × Skills with job counts
+    - Insights: Dominant skill per city
+    - Metadata: Total jobs, cities, skills analyzed
+    
+    Example insights:
+    - "Python is dominant in Casablanca (45% of jobs)"
+    - "PHP/Symfony is popular in Rabat"
+    - "React is evenly distributed across cities"
+    """
+    city_skill_counts = defaultdict(lambda: defaultdict(int))
+    
+    # Count skills per city
+    for job in JOBS_DATA:
+        city = job.get("searched_city", "Unknown")
+        skills = job.get("extracted_skills", [])
+        if city and skills:
+            for skill in skills:
+                city_skill_counts[city][skill] += 1
+    
+    all_cities = sorted(city_skill_counts.keys())
+    
+    # Get top skills across all cities
+    skill_totals = defaultdict(int)
+    for city_data in city_skill_counts.values():
+        for skill, count in city_data.items():
+            skill_totals[skill] += count
+    
+    top_skill_list = sorted(skill_totals.items(), key=lambda x: x[1], reverse=True)[:top_skills]
+    top_skill_names = [skill for skill, _ in top_skill_list]
+    
+    # Build matrix
+    matrix = []
+    for city in all_cities:
+        row = {
+            "city": city,
+            "total_jobs": sum(city_skill_counts[city].values()),
+            "skills": {skill: city_skill_counts[city].get(skill, 0) for skill in top_skill_names},
+        }
+        matrix.append(row)
+    
+    # Calculate insights (dominant skill per city)
+    insights = []
+    for city in all_cities:
+        city_data = city_skill_counts[city]
+        if not city_data:
+            continue
+        
+        total = sum(city_data.values())
+        top_skill_in_city = max(city_data.items(), key=lambda x: x[1])
+        skill_name, skill_count = top_skill_in_city
+        percentage = (skill_count / total) * 100
+        
+        insights.append({
+            "city": city,
+            "dominant_skill": skill_name,
+            "count": skill_count,
+            "percentage": round(percentage, 1),
+            "total_jobs": total,
+            "message": f"{skill_name} is dominant in {city} ({percentage:.1f}% of jobs)",
+        })
+    
+    return {
+        "cities": all_cities,
+        "skills": top_skill_names,
+        "matrix": matrix,
+        "insights": sorted(insights, key=lambda x: x["total_jobs"], reverse=True),
+        "metadata": {
+            "total_jobs": len(JOBS_DATA),
+            "total_cities": len(all_cities),
+            "total_skills_analyzed": len(top_skill_names),
+        },
+    }
+
 

@@ -45,6 +45,8 @@ This project transforms raw job postings into actionable market intelligence. It
 - 🧠 **AI-Powered Semantic Search**: Vector search finds jobs by meaning, not just keywords (e.g., "AI" finds "Machine Learning", "LLM", "Artificial Intelligence")
 - 🎯 **Hybrid Search**: Combine semantic search with exact filters (e.g., find "AI jobs" in "Casablanca" requiring "Python")
 - 🔗 **More Like This**: Find similar jobs based on any job posting using AI similarity matching
+- 🔮 **Trend Forecasting**: Predict future skill demand using linear regression and moving averages
+- 🗺️ **City-Tech Heatmap**: Visual matrix showing which technologies are popular in which cities
 - 🌐 **RESTful API**: FastAPI backend with automatic documentation
 - ☁️ **Supabase Storage**: Processed jobs synced to PostgreSQL + JSONB for reliable persistence
 - 📱 **Responsive UI**: Dark mode dashboard built with Next.js and Tailwind CSS
@@ -123,6 +125,7 @@ Job Market Trends Tracker/
 ├── generate_embeddings.py          # Generate vector embeddings for semantic search
 ├── import_to_supabase.py           # Import jobs to Supabase database
 ├── test_semantic_search.py         # Test script for semantic search functionality
+├── forecast_trends.py              # Trend forecasting and analytics script
 │
 ├── requirements.txt                 # Python dependencies
 ├── morocco_data_market.csv         # Raw scraped data
@@ -139,6 +142,7 @@ Job Market Trends Tracker/
 │
 ├── SEMANTIC_SEARCH_SETUP.md       # Semantic search documentation
 ├── HYBRID_SEARCH_SETUP.md         # Hybrid search and More Like This docs
+├── ANALYTICS_SETUP.md             # Trend forecasting and heatmap docs
 │
 ├── client/                         # Next.js frontend
 │   ├── app/
@@ -551,6 +555,95 @@ Return month-over-month counts for the most in-demand skills (or a specific skil
 }
 ```
 
+### `GET /analytics/forecast` 🆕
+**Trend Forecasting**: Predict future skill demand using linear regression.
+
+**Query Parameters**:
+- `skill` (optional): Specific skill to forecast (e.g., "Python")
+- `top` (optional, default: 10, max: 20): Number of top skills to forecast
+
+**Example**:
+```bash
+# Forecast top 10 skills
+curl "http://127.0.0.1:8000/analytics/forecast"
+
+# Forecast specific skill
+curl "http://127.0.0.1:8000/analytics/forecast?skill=Python"
+```
+
+**Response**:
+```json
+{
+  "forecasts": [
+    {
+      "skill": "Python",
+      "trend": "growing",
+      "trend_strength": "strong",
+      "slope": 7.5,
+      "current_month_count": 127,
+      "predicted_next_month": 60,
+      "predicted_change_pct": 31.4,
+      "recommendations": [
+        "✅ High demand - Consider learning this skill",
+        "🔥 Strong growth - Hot skill in the market"
+      ]
+    }
+  ]
+}
+```
+
+**How it works**:
+- Analyzes historical job data by month
+- Uses simple linear regression to calculate trend
+- Predicts next month's demand
+- Provides actionable recommendations
+- Perfect for: Career planning, skill development, market research
+
+### `GET /analytics/heatmap` 🆕
+**City-Tech Heatmap**: Matrix showing which technologies are popular in which cities.
+
+**Query Parameters**:
+- `top_skills` (optional, default: 15, max: 30): Number of top skills to include
+
+**Example**:
+```bash
+curl "http://127.0.0.1:8000/analytics/heatmap?top_skills=20"
+```
+
+**Response**:
+```json
+{
+  "cities": ["Casablanca", "Rabat", "Tanger", "Morocco"],
+  "skills": ["Python", "SQL", "Java", "..."],
+  "matrix": [
+    {
+      "city": "Casablanca",
+      "total_jobs": 200,
+      "skills": {
+        "Python": 90,
+        "SQL": 75,
+        "Java": 45
+      }
+    }
+  ],
+  "insights": [
+    {
+      "city": "Casablanca",
+      "dominant_skill": "Python",
+      "percentage": 45.0,
+      "message": "Python is dominant in Casablanca (45.0% of jobs)"
+    }
+  ]
+}
+```
+
+**How it works**:
+- Counts skill occurrences per city
+- Creates matrix: Cities × Technologies
+- Identifies dominant skill per city
+- Reveals regional tech preferences
+- Perfect for: Job search targeting, relocation decisions, market analysis
+
 ### `GET /export/csv`
 Download job listings as a CSV file (Excel-compatible). Perfect for data analysis in spreadsheets.
 
@@ -816,6 +909,8 @@ pkill -f "next dev"
 - [x] **AI-Powered Semantic Search**: Vector embeddings enable intelligent job search by meaning
 - [x] **Hybrid Search**: Combine semantic search with exact filters (city, role, skill)
 - [x] **More Like This**: Find similar jobs using vector similarity
+- [x] **Trend Forecasting**: Predict skill demand with linear regression
+- [x] **City-Tech Heatmap**: Analyze regional technology preferences
 - [x] **Export Features**: PDF reports, CSV downloads
 - [ ] **Personalized Recommendations**: ML-based job recommendations based on user preferences
 - [ ] **Advanced Analytics**: Salary trends, experience level analysis
@@ -855,7 +950,7 @@ Built as a full-stack data intelligence project demonstrating:
 ---
 
 **Last Updated**: November 2025  
-**Version**: 1.2
+**Version**: 1.3
 
 ---
 
@@ -886,7 +981,13 @@ cd client && npm run dev
   - `test_sync.py` - Verify Supabase sync works
   - `test_semantic_search.py` - Test AI-powered search
   - `test_hybrid_search.py` - Test hybrid search and similar jobs
+  - `forecast_trends.py` - Run trend forecasting and analytics
 
 - **Setup Scripts**:
   - `fix_supabase_rls_simple.sql` - Fix RLS permissions (use this one!)
   - `fix_supabase_rls.sql` - Alternative RLS fix with policies
+  
+- **Documentation**:
+  - `SEMANTIC_SEARCH_SETUP.md` - AI search setup
+  - `HYBRID_SEARCH_SETUP.md` - Hybrid search documentation
+  - `ANALYTICS_SETUP.md` - Forecasting and heatmap guide
